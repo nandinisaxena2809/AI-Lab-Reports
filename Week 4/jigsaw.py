@@ -1,52 +1,79 @@
-import numpy as np, random, math, scipy.io, matplotlib.pyplot as plt
+% Load scrambled image
+load('scrambled_lena.mat');   % loads Iscrambled
+I = double(Iscrambled);
 
-# ----------- Load image from .mat -----------
-mat = scipy.io.loadmat('scrambled_lena.mat')
-# assume the image array is called 'img' in .mat
-img = mat['img']
-if img.ndim == 3 and img.shape[2]==1: img = img[:,:,0]
-img = (img - img.min()) / (img.max()-img.min()) * 255
-img = img.astype(np.uint8)
+% Puzzle parameters
+N = 8;                         % number of tiles per row/column (8x8 = 64 pieces)
+tileSize = size(I,1) / N;
 
-tile_h, tile_w = 32, 32        # adjust to match the tiles
-R, C = img.shape[0]//tile_h, img.shape[1]//tile_w
+% Divide image into tiles
+tiles = mat2cell(I, tileSize*ones(1,N), tileSize*ones(1,N));
 
-# ----------- Cut into tiles -----------
-tiles = [img[r*tile_h:(r+1)*tile_h, c*tile_w:(c+1)*tile_w] 
-         for r in range(R) for c in range(C)]
+% Start from a random arrangement
+perm = randperm(N*N);
+current_state = reshape(perm, [N, N]);
 
-# ----------- Energy function -----------
-def energy(perm):
-    e = 0
-    for r in range(R):
-        for c in range(C):
-            idx = perm[r*C + c]
-            if c < C-1: e += np.sum((tiles[idx][:, -1]-tiles[perm[r*C + c +1]][:,0])**2)
-            if r < R-1: e += np.sum((tiles[idx][-1,:]-tiles[perm[(r+1)*C+c]][0,:])**2)
-    return e
+% --- Energy (cost) function ---
+function E = energy(tiles, state)
+  N = size(state,1);
+  E = 0;
+  for i = 1:N
+    for j = 1:N
+      tile = tiles{state(i,j)};
+      % Compare right edge
+      if j < N
+        right_tile = tiles{state(i,j+1)};
+        E = E + sum((tile(:,end) - right_tile(:,1)).^2);
+      end
+      % Compare bottom edge
+      if i < N
+        bottom_tile = tiles{state(i+1,j)};
+        E = E + sum((tile(end,:) - bottom_tile(1,:)).^2);
+      end
+    end
+  end
+end
 
-# ----------- Simulated annealing -----------
-N = R*C
-perm = list(range(N))
-random.shuffle(perm)
-E = energy(perm)
-T = 1000; alpha=0.99
-best_perm, best_E = perm[:], E
+% --- Simulated Annealing Parameters ---
+T = 10000;           % initial temperature
+T_min = 1e-3;
+alpha = 0.99;
+E_curr = energy(tiles, current_state);
+best_state = current_state;
+best_E = E_curr;
 
-for _ in range(10000):
-    i,j = random.sample(range(N),2)
-    perm[i], perm[j] = perm[j], perm[i]
-    E2 = energy(perm)
-    dE = E2 - E
-    if dE <0 or random.random() < math.exp(-dE/T): E,E2 = E2,E2
-    else: perm[i], perm[j] = perm[j], perm[i]
-    if E < best_E: best_E,best_perm = E,perm[:]
-    T *= alpha
+% --- Simulated Annealing Loop ---
+while T > T_min
+  for iter = 1:100
+    new_state = current_state;
+    idx = randperm(numel(new_state), 2);
+    % Swap two tiles
+    tmp = new_state(idx(1));
+    new_state(idx(1)) = new_state(idx(2));
+    new_state(idx(2)) = tmp;
+    
+    E_new = energy(tiles, new_state);
+    dE = E_new - E_curr;
 
-# ----------- Reconstruct image -----------
-recon = np.zeros_like(img)
-for r in range(R):
-    for c in range(C):
-        recon[r*tile_h:(r+1)*tile_h, c*tile_w:(c+1)*tile_w] = tiles[best_perm[r*C+c]]
+    % Accept or reject
+    if dE < 0 || rand() < exp(-dE/T)
+      current_state = new_state;
+      E_curr = E_new;
+      if E_curr < best_E
+        best_state = current_state;
+        best_E = E_curr;
+      end
+    end
+  end
+  T = T * alpha;  % cool down
+  fprintf('Temp: %.3f | Best Energy: %.3f\n', T, best_E);
+end
 
-plt.imshow(recon, cmap='gray'); plt.axis('off'); plt.show()
+% --- Reconstruct image from best state ---
+final_tiles = tiles(best_state(:));
+I_reconstructed = cell2mat(reshape(final_tiles, [N, N]));
+
+% --- Display results ---
+figure;
+subplot(1,2,1); imshow(uint8(I)); title('Scrambled Image');
+subplot(1,2,2); imshow(uint8(I_reconstructed)); title('Reconstructed Image');
